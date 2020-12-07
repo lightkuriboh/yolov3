@@ -1,0 +1,8 @@
+
+train: ../RocketTeam2020/images/
+val: ../RocketTeam2020/images/
+
+nc: 8
+
+names: ['normal motor bike', 'racing motor bike', 'boy', 'girl', 'round table', 'rectangle table', 'single chair', 'long chair']
+
