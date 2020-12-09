@@ -61,7 +61,7 @@ def train(hyp, opt, device, tb_writer=None, wandb=None):
     with open(save_dir / 'opt.yaml', 'w') as f:
         yaml.dump(vars(opt), f, sort_keys=False)
 
-    # Configure
+    # Configure, load data dict, classes
     plots = not opt.evolve  # create plots
     cuda = device.type != 'cpu'
     init_seeds(2 + rank)
@@ -74,7 +74,7 @@ def train(hyp, opt, device, tb_writer=None, wandb=None):
     nc, names = (1, ['item']) if opt.single_cls else (int(data_dict['nc']), data_dict['names'])  # number classes, names
     assert len(names) == nc, '%g names found for nc=%g dataset in %s' % (len(names), nc, opt.data)  # check
 
-    # Model
+    # Initiate the Model
     pretrained = weights.endswith('.pt')
     if pretrained:
         with torch_distributed_zero_first(rank):
@@ -91,7 +91,7 @@ def train(hyp, opt, device, tb_writer=None, wandb=None):
     else:
         model = Model(opt.cfg, ch=3, nc=nc).to(device)  # create
 
-    # Freeze
+    # Freeze some parameters, so that it would not be trained
     freeze = []  # parameter names to freeze (full or partial)
     for k, v in model.named_parameters():
         v.requires_grad = True  # train all layers
@@ -99,7 +99,7 @@ def train(hyp, opt, device, tb_writer=None, wandb=None):
             print('freezing %s' % k)
             v.requires_grad = False
 
-    # Optimizer
+    # Optimizer initiation
     nbs = 64  # nominal batch size
     accumulate = max(round(nbs / total_batch_size), 1)  # accumulate loss before optimizing
     hyp['weight_decay'] *= total_batch_size * accumulate / nbs  # scale weight_decay
@@ -125,6 +125,7 @@ def train(hyp, opt, device, tb_writer=None, wandb=None):
 
     # Scheduler https://arxiv.org/pdf/1812.01187.pdf
     # https://pytorch.org/docs/stable/_modules/torch/optim/lr_scheduler.html#OneCycleLR
+    # Learning rate function for learning rate scheduler
     lf = lambda x: ((1 + math.cos(x * math.pi / epochs)) / 2) * (1 - hyp['lrf']) + hyp['lrf']  # cosine
     scheduler = lr_scheduler.LambdaLR(optimizer, lr_lambda=lf)
     # plot_lr_scheduler(optimizer, scheduler, epochs)
@@ -138,7 +139,7 @@ def train(hyp, opt, device, tb_writer=None, wandb=None):
                                id=ckpt.get('wandb_id') if 'ckpt' in locals() else None)
     loggers = {'wandb': wandb}  # loggers dict
 
-    # Resume
+    # Resume the on-training progress
     start_epoch, best_fitness = 0, 0.0
     if pretrained:
         # Optimizer
@@ -162,7 +163,7 @@ def train(hyp, opt, device, tb_writer=None, wandb=None):
 
         del ckpt, state_dict
 
-    # Image sizes
+    # Resize the image to be divisible by the stride
     gs = int(max(model.stride))  # grid size (max stride)
     imgsz, imgsz_test = [check_img_size(x, gs) for x in opt.img_size]  # verify imgsz are gs-multiples
 
@@ -171,11 +172,12 @@ def train(hyp, opt, device, tb_writer=None, wandb=None):
         model = torch.nn.DataParallel(model)
 
     # SyncBatchNorm
+    # https://pytorch.org/docs/stable/generated/torch.nn.SyncBatchNorm.html
     if opt.sync_bn and cuda and rank != -1:
         model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model).to(device)
         logger.info('Using SyncBatchNorm()')
 
-    # EMA
+    # EMA for smoothed weights
     ema = ModelEMA(model) if rank in [-1, 0] else None
 
     # DDP mode
